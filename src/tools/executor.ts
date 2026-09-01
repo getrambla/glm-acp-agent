@@ -412,21 +412,31 @@ export class ToolExecutor {
     args: Record<string, unknown>
   ): Promise<ToolResult> {
     const path = String(args["path"] ?? "").trim();
-    const oldText = String(args["old_text"] ?? "");
-    const newText = String(args["new_text"] ?? "");
     if (!path) {
       return this.failAndReturn(toolCallId, "edit_file", args, "Error: `path` is required.");
     }
-    if (oldText.length === 0) {
+    const oldString = args["old_string"];
+    if (typeof oldString !== "string" || oldString.length === 0) {
       return this.failAndReturn(
         toolCallId,
         "edit_file",
         args,
-        "Error: `old_text` is required and must be a non-empty exact snippet from the file."
+        "Error: `old_string` is required and must be a non-empty string (creating content is write_file's job)."
       );
     }
+    const newString = args["new_string"];
+    if (typeof newString !== "string") {
+      return this.failAndReturn(
+        toolCallId,
+        "edit_file",
+        args,
+        "Error: `new_string` is required and must be a string (use \"\" to delete the matched text)."
+      );
+    }
+    const replaceAll = args["replace_all"] === true;
     const absolutePath = this.resolvePath(path);
 
+    // Step 1: announce the pending tool call so the client can show it.
     await this.connection.sessionUpdate({
       sessionId: this.sessionId,
       update: {
@@ -440,31 +450,39 @@ export class ToolExecutor {
       },
     });
 
+    // Step 2: read and match before prompting, so the user is never asked to
+    // approve an edit that cannot apply.
     let current: string;
     try {
       current = await this.performRead(absolutePath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.markFailed(toolCallId, message);
-      return { content: `Error editing file: cannot read ${path}: ${message}` };
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      const hint =
+        code === "ENOENT"
+          ? " File does not exist — use write_file to create it, or re-check the path."
+          : "";
+      const full = `Error editing file: ${message}.${hint}`;
+      await this.markFailed(toolCallId, full);
+      return { content: full };
     }
 
-    const occurrences = current.split(oldText).length - 1;
+    const occurrences = current.split(oldString).length - 1;
     if (occurrences === 0) {
-      await this.markFailed(toolCallId, "old_text not found in file");
-      return {
-        content: `Error editing file: \`old_text\` was not found in ${path}. Re-read the file and copy the snippet exactly, including whitespace.`,
-      };
+      const message =
+        "Error editing file: `old_string` not found in the file. It may have changed since you read it — re-read the file first, then retry with the exact current text.";
+      await this.markFailed(toolCallId, message);
+      return { content: message };
     }
-    if (occurrences > 1) {
-      await this.markFailed(toolCallId, `old_text matches ${occurrences} locations`);
-      return {
-        content: `Error editing file: \`old_text\` occurs ${occurrences} times in ${path}. Add surrounding lines to make it unique, then retry.`,
-      };
+    if (occurrences > 1 && !replaceAll) {
+      const message = `Error editing file: found ${occurrences} matches for \`old_string\`. Include more surrounding lines to make it unique, or pass replace_all: true to replace every occurrence.`;
+      await this.markFailed(toolCallId, message);
+      return { content: message };
     }
 
-    // Full payload in the prompt — the user approves the exact edit (see
-    // writeFile; elision is for sessionUpdate cards only).
+    // Step 3: request user permission based on the current session mode. The
+    // prompt carries the full payload — an approval decides on exactly this
+    // edit, so elision is reserved for sessionUpdate UI cards (step 1).
     const permissionResult = await this.maybeRequestPermission({
       toolCallId,
       kind: "write",
@@ -487,9 +505,9 @@ export class ToolExecutor {
       return { content: "Edit rejected by user." };
     }
 
-    // The permission prompt can sit in front of the user for a while; re-read
-    // and re-validate so a buffer edited while deciding is not silently
-    // overwritten by this stale snapshot.
+    // Step 4: the permission prompt can sit in front of the user for a while;
+    // re-read and re-validate so a file edited while deciding is not clobbered
+    // by this stale snapshot.
     let latest: string;
     try {
       latest = await this.performRead(absolutePath);
@@ -498,18 +516,19 @@ export class ToolExecutor {
       await this.markFailed(toolCallId, message);
       return { content: `Error editing file: cannot re-read ${path}: ${message}` };
     }
-    const latestOccurrences = latest.split(oldText).length - 1;
-    if (latestOccurrences !== 1) {
+    const latestOccurrences = latest.split(oldString).length - 1;
+    if (latestOccurrences === 0 || (latestOccurrences > 1 && !replaceAll)) {
       const reason =
         latestOccurrences === 0
-          ? "`old_text` is no longer present"
-          : `\`old_text\` now occurs ${latestOccurrences} times`;
+          ? "`old_string` is no longer present"
+          : `\`old_string\` now occurs ${latestOccurrences} times`;
       await this.markFailed(toolCallId, `file changed while waiting for permission (${reason})`);
       return {
         content: `Error editing file: ${path} changed while waiting for permission (${reason}). Re-read the file and retry.`,
       };
     }
 
+    // Step 5: move to in_progress and execute.
     await this.connection.sessionUpdate({
       sessionId: this.sessionId,
       update: {
@@ -519,25 +538,43 @@ export class ToolExecutor {
       },
     });
 
+    const nextContent = replaceAll
+      ? latest.split(oldString).join(newString)
+      : latest.replace(oldString, newString);
+
+    // Step 6: write, and only report completion once the write resolved so a
+    // failed write never shows a completed diff that did not happen.
     try {
-      await this.performWrite(absolutePath, latest.replace(oldText, newText));
-
-      await this.connection.sessionUpdate({
-        sessionId: this.sessionId,
-        update: {
-          sessionUpdate: "tool_call_update",
-          toolCallId,
-          status: "completed",
-          rawOutput: { success: true },
-        },
-      });
-
-      return { content: `File edited successfully: ${path}` };
+      await this.performWrite(absolutePath, nextContent);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.markFailed(toolCallId, message);
-      return { content: `Error editing file: ${message}` };
+      const full = `Error editing file: ${message}`;
+      await this.markFailed(toolCallId, full);
+      return { content: full };
     }
+
+    const count = replaceAll ? latestOccurrences : 1;
+    await this.connection.sessionUpdate({
+      sessionId: this.sessionId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId,
+        status: "completed",
+        content: [
+          {
+            type: "diff",
+            path: absolutePath,
+            oldText: latest,
+            newText: nextContent,
+          },
+        ],
+        rawOutput: { success: true, replacements: count },
+      },
+    });
+
+    return {
+      content: `Edited ${path}: replaced ${count} occurrence${count === 1 ? "" : "s"}.`,
+    };
   }
 
   private async listFiles(

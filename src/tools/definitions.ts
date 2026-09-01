@@ -46,32 +46,6 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     type: "function",
     function: {
-      name: "edit_file",
-      description:
-        "Replace one exact snippet inside an existing text file — a surgical edit that does not rewrite the whole file. Prefer this over write_file when modifying existing files: it is smaller, faster, and avoids output-token limits. old_text must match the file exactly (including whitespace) and must occur exactly once; include surrounding lines to disambiguate.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: {
-            type: "string",
-            description: "Absolute or relative path to the file to edit.",
-          },
-          old_text: {
-            type: "string",
-            description: "The exact existing text to replace. Must appear exactly once in the file.",
-          },
-          new_text: {
-            type: "string",
-            description: "The replacement text. Use an empty string to delete the snippet.",
-          },
-        },
-        required: ["path", "old_text", "new_text"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "write_file",
       description:
         "Write or overwrite a text file from the agent process after asking the user for permission. Relative paths resolve against the ACP session working directory. Use this for new files or full rewrites; prefer edit_file for small changes to existing files.",
@@ -88,6 +62,36 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           },
         },
         required: ["path", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "edit_file",
+      description:
+        "Edit an existing text file with a surgical find-and-replace after asking the user for permission. old_string must match the file's current content exactly: if it is not found (the file may have changed since you read it — re-read it) or matches more than once (include more surrounding lines, or pass replace_all) the edit fails and the file is left untouched. Prefer this over write_file for existing files; use write_file only for new files.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: "Absolute or relative path to the file to edit.",
+          },
+          old_string: {
+            type: "string",
+            description: "The exact current text to replace. Must match the file as it exists on disk right now.",
+          },
+          new_string: {
+            type: "string",
+            description: "The replacement text. Pass an empty string to delete the matched text.",
+          },
+          replace_all: {
+            type: "boolean",
+            description: "Replace every occurrence of old_string instead of failing on multiple matches. Default false.",
+          },
+        },
+        required: ["path", "old_string", "new_string"],
       },
     },
   },

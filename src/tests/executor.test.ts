@@ -485,9 +485,9 @@ test("edit_file replaces a unique snippet and goes through the permission flow",
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "const b = 2;", new_text: "const b = 3;" })
+      JSON.stringify({ path, old_string: "const b = 2;", new_string: "const b = 3;" })
     );
-    assert.match(result.content, /edited successfully/);
+    assert.match(result.content, /Edited .*: replaced 1 occurrence\./);
     assert.equal(readFileSync(path, "utf8"), "const a = 1;\nconst b = 3;\n");
     assert.deepEqual(
       conn.writeTextFileCalls.map((c) => ({ path: c.path, content: c.content })),
@@ -509,7 +509,7 @@ test("edit_file replaces a unique snippet and goes through the permission flow",
   }
 });
 
-test("edit_file fails fast when old_text is absent, without requesting permission", async () => {
+test("edit_file fails fast when old_string is absent, without requesting permission", async () => {
   const dir = mkdtempSync(join(tmpdir(), "glm-executor-edit-missing-"));
   const path = join(dir, "code.txt");
   writeFileSync(path, "hello", "utf8");
@@ -519,9 +519,9 @@ test("edit_file fails fast when old_text is absent, without requesting permissio
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "nope", new_text: "x" })
+      JSON.stringify({ path, old_string: "nope", new_string: "x" })
     );
-    assert.match(result.content, /was not found/);
+    assert.match(result.content, /`old_string` not found/);
     assert.equal(readFileSync(path, "utf8"), "hello");
     assert.equal(conn.permissionRequests.length, 0);
     const last = conn.updates.at(-1) as { update: { status?: string } };
@@ -531,7 +531,7 @@ test("edit_file fails fast when old_text is absent, without requesting permissio
   }
 });
 
-test("edit_file refuses ambiguous old_text matches", async () => {
+test("edit_file refuses ambiguous old_string matches", async () => {
   const dir = mkdtempSync(join(tmpdir(), "glm-executor-edit-ambiguous-"));
   const path = join(dir, "code.txt");
   writeFileSync(path, "return 1;\nreturn 1;\n", "utf8");
@@ -541,9 +541,9 @@ test("edit_file refuses ambiguous old_text matches", async () => {
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "return 1;", new_text: "return 2;" })
+      JSON.stringify({ path, old_string: "return 1;", new_string: "return 2;" })
     );
-    assert.match(result.content, /occurs 2 times/);
+    assert.match(result.content, /found 2 matches/);
     assert.equal(readFileSync(path, "utf8"), "return 1;\nreturn 1;\n");
     assert.equal(conn.permissionRequests.length, 0);
   } finally {
@@ -561,7 +561,7 @@ test("edit_file rejected by user leaves the file untouched", async () => {
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "before", new_text: "after" })
+      JSON.stringify({ path, old_string: "before", new_string: "after" })
     );
     assert.match(result.content, /rejected by user/i);
     assert.equal(readFileSync(path, "utf8"), "before");
@@ -583,9 +583,9 @@ test("edit_file computes the edit against the client's buffer, not stale disk", 
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "const b = 2;", new_text: "const b = 3;" })
+      JSON.stringify({ path, old_string: "const b = 2;", new_string: "const b = 3;" })
     );
-    assert.match(result.content, /edited successfully/);
+    assert.match(result.content, /Edited /);
     // The write went back through the client with the merged content.
     assert.deepEqual(
       conn.writeTextFileCalls.map((c) => c.content),
@@ -608,9 +608,9 @@ test("edit_file falls back to agent-process disk I/O without the writeTextFile c
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "beta", new_text: "gamma" })
+      JSON.stringify({ path, old_string: "beta", new_string: "gamma" })
     );
-    assert.match(result.content, /edited successfully/);
+    assert.match(result.content, /Edited /);
     assert.equal(readFileSync(path, "utf8"), "alpha gamma\n");
     assert.equal(conn.writeTextFileCalls.length, 0);
     assert.equal(conn.readTextFileCalls.length, 0);
@@ -633,7 +633,7 @@ test("edit_file re-validates after the permission prompt and refuses a file chan
     const result = await exec.execute(
       "tc1",
       "edit_file",
-      JSON.stringify({ path, old_text: "old snippet", new_text: "new snippet" })
+      JSON.stringify({ path, old_string: "old snippet", new_string: "new snippet" })
     );
     assert.match(result.content, /changed while waiting for permission/);
     // The user's concurrent edit is intact and nothing was written back.
@@ -751,7 +751,7 @@ test("permission prompts receive the full payload while UI cards stay elided", a
     await exec.execute(
       "tc2",
       "edit_file",
-      JSON.stringify({ path: editPath, old_text: "old", new_text: replacement })
+      JSON.stringify({ path: editPath, old_string: "old", new_string: replacement })
     );
 
     await exec.execute("tc3", "run_command", JSON.stringify({ command: "printf '%s' ok" }));
@@ -763,8 +763,8 @@ test("permission prompts receive the full payload while UI cards stay elided", a
       toolCall: { rawInput: Record<string, unknown> };
     }>;
     assert.equal(writeReq.toolCall.rawInput["content"], big);
-    assert.equal(editReq.toolCall.rawInput["new_text"], replacement);
-    assert.equal(editReq.toolCall.rawInput["old_text"], "old");
+    assert.equal(editReq.toolCall.rawInput["new_string"], replacement);
+    assert.equal(editReq.toolCall.rawInput["old_string"], "old");
     assert.equal(runReq.toolCall.rawInput["command"], "printf '%s' ok");
 
     // The sessionUpdate announcement cards, in contrast, stay elided.
