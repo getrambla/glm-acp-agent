@@ -2323,10 +2323,11 @@ test("resumeSession restores in-memory state without replaying messages", async 
 
     assert.equal(result.models?.currentModelId, "glm-5.1");
     await flushNotifications();
-    // No replay updates expected — only the slash-command advertisement.
+    // No replay updates — just the slash-command advertisement and the
+    // context-usage snapshot.
     assert.deepEqual(
       conn.updates.map((u) => (u.update as { sessionUpdate: string }).sessionUpdate),
-      ["available_commands_update"]
+      ["available_commands_update", "usage_update"]
     );
   } finally {
     cleanup();
@@ -2885,9 +2886,9 @@ test("loadSession advertises commands after replaying history", async () => {
     const kinds = conn.updates.map(
       (u) => (u.update as { sessionUpdate: string }).sessionUpdate
     );
-    // The snapshot lands last so the client has a hydrated transcript before it
-    // paints the slash menu.
-    assert.equal(kinds[kinds.length - 1], "available_commands_update");
+    // Both attach notifications land after the replayed transcript; the usage
+    // snapshot is queued last.
+    assert.equal(kinds[kinds.length - 1], "usage_update");
     assert.deepEqual(
       commandUpdates(conn)[0]?.update.availableCommands?.map((c) => c.name),
       ["deploy"]

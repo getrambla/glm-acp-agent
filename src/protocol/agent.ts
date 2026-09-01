@@ -412,6 +412,7 @@ export class GlmAcpAgent implements Agent {
     });
 
     this.scheduleAvailableCommands(sessionId);
+    this.scheduleUsageUpdate(sessionId);
 
     return {
       sessionId,
@@ -445,6 +446,28 @@ export class GlmAcpAgent implements Agent {
         update: {
           sessionUpdate: "available_commands_update",
           availableCommands: availableCommandsState(session.commands),
+        },
+      });
+    }, 0);
+  }
+
+  /**
+   * Queue a `usage_update` snapshot so clients show the context meter as soon
+   * as they attach — new, loaded, resumed, or forked — instead of only after
+   * the first prompt completes. `used` is an estimate of the current history
+   * (the API reports exact usage only with a completion); the first prompt's
+   * real usage replaces it.
+   */
+  private scheduleUsageUpdate(sessionId: string): void {
+    setTimeout(() => {
+      const session = this.sessions.get(sessionId);
+      if (!session) return;
+      void safeSessionUpdate(this.connection, {
+        sessionId,
+        update: {
+          sessionUpdate: "usage_update",
+          used: estimateTokens(session.messages),
+          size: getContextWindow(session.model),
         },
       });
     }, 0);
@@ -978,6 +1001,7 @@ export class GlmAcpAgent implements Agent {
     );
 
     this.scheduleAvailableCommands(params.sessionId);
+    this.scheduleUsageUpdate(params.sessionId);
 
     return {
       models: this.modelsState(persisted.model),
@@ -1028,6 +1052,7 @@ export class GlmAcpAgent implements Agent {
     // Notify on the *created* session id — the parent thread's command list is
     // unchanged and a notify there would repaint the wrong menu.
     this.scheduleAvailableCommands(newSessionId);
+    this.scheduleUsageUpdate(newSessionId);
 
     return {
       sessionId: newSessionId,
@@ -1067,6 +1092,7 @@ export class GlmAcpAgent implements Agent {
     this.sessions.set(params.sessionId, restored);
 
     this.scheduleAvailableCommands(params.sessionId);
+    this.scheduleUsageUpdate(params.sessionId);
 
     // Resume does NOT replay history — the client keeps its own UI state and
     // just wants the agent to pick up where it left off.
@@ -1261,6 +1287,17 @@ export class GlmAcpAgent implements Agent {
 
           if (chunk.usage) {
             lastUsage = chunk.usage;
+            // Stream live context-window usage (ACP `usage_update`). The final
+            // usage chunk's inputTokens is the full prompt sent this call, i.e.
+            // the context currently held by the session.
+            void safeSessionUpdate(this.connection, {
+              sessionId,
+              update: {
+                sessionUpdate: "usage_update",
+                used: chunk.usage.inputTokens,
+                size: getContextWindow(session.model),
+              },
+            });
           }
 
           if (chunk.done) {
