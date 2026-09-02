@@ -302,6 +302,15 @@ export class ToolExecutor {
     if (!path) {
       return this.failAndReturn(toolCallId, "write_file", args, "Error: `path` is required.");
     }
+    const overwrite = args["overwrite"];
+    if (overwrite !== undefined && typeof overwrite !== "boolean") {
+      return this.failAndReturn(
+        toolCallId,
+        "write_file",
+        args,
+        "Error: `overwrite` must be a boolean when provided."
+      );
+    }
     const absolutePath = this.resolvePath(path);
 
     // Step 0: read the file we are about to overwrite so the tool call can
@@ -317,6 +326,17 @@ export class ToolExecutor {
         await this.markFailed(toolCallId, full);
         return { content: full };
       }
+    }
+
+    if (oldText !== undefined && overwrite !== true) {
+      const message = `Error writing file: refusing to overwrite ${path}. Use edit_file for surgical changes to an existing file, or pass overwrite: true for a deliberate full rewrite.`;
+      await this.markFailed(toolCallId, message);
+      return { content: message };
+    }
+    if (oldText === undefined && overwrite !== undefined) {
+      const message = `Error writing file: bad move — you passed overwrite when ${path} does not exist. That is a bad habit forming; do not reach for the escape hatch by default. Omit overwrite for new files.`;
+      await this.markFailed(toolCallId, message);
+      return { content: message };
     }
 
     // Step 1: announce the pending tool call so the client can show the diff

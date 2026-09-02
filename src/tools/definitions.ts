@@ -48,7 +48,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
     function: {
       name: "write_file",
       description:
-        "Write or overwrite a text file from the agent process after asking the user for permission. Relative paths resolve against the ACP session working directory. Use this for new files or full rewrites; prefer edit_file for small changes to existing files.",
+        "Write a text file from the agent process after asking the user for permission. Relative paths resolve against the ACP session working directory. Creating a new file needs no extra arguments; replacing an existing file requires overwrite: true (prefer edit_file for surgical changes).",
       parameters: {
         type: "object",
         properties: {
@@ -59,6 +59,10 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
           content: {
             type: "string",
             description: "The full text content to write to the file.",
+          },
+          overwrite: {
+            type: "boolean",
+            description: "Pass true to replace the full content of an existing file (a deliberate full rewrite). Omit it when creating a new file — passing it for a file that does not exist fails.",
           },
         },
         required: ["path", "content"],

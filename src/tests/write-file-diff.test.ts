@@ -81,7 +81,7 @@ test("write_file overwriting an existing file emits old/new in the diff block", 
     const result = await exec.execute(
       "tc1",
       "write_file",
-      JSON.stringify({ path, content: updated })
+      JSON.stringify({ path, content: updated, overwrite: true })
     );
     assert.match(result.content, /written successfully/);
     assert.equal(readFileSync(path, "utf8"), updated);
@@ -230,7 +230,7 @@ test("write_file keeps its lifecycle sequence and failure paths alongside the di
     const rejected = await rejectExec.execute(
       "tc2",
       "write_file",
-      JSON.stringify({ path, content: "nope" })
+      JSON.stringify({ path, content: "nope", overwrite: true })
     );
     assert.match(rejected.content, /rejected by user/i);
     assert.equal(updatesOf(rejectConn).at(-1)?.status, "failed");
