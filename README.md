@@ -35,7 +35,7 @@ Built-in web tools use Coding Plan-compatible MCP endpoints, not the general `/a
 - **Session persistence** – conversations are written to `~/.local/state/glm-acp-agent/sessions/` and can be reloaded via `session/load`, branched via `session/fork`, or resumed without replay via `session/resume`
 - **Nine built-in tools** (see below)
 - **Self-sufficient local tools** – file reads/writes, directory listings, and shell commands run in the agent process, so they do not depend on ACP client `fs` or `terminal` capabilities
-- **Configurable permissions** – `write_file` and `run_command` behavior depends on the active session mode (prompts by default)
+- **Configurable permissions** – `write_file`, `edit_file`, and `run_command` behavior depends on the active session mode (prompts by default)
 - **Protocol-correct stop reasons** – maps model and runtime conditions to ACP `end_turn`, `max_tokens`, `max_turn_requests`, `refusal`, and `cancelled`
 - **Protocol-correct tool statuses** – `pending` → `in_progress` → `completed` / `failed`
 - **Token usage reporting** – aggregated usage is returned on the `session/prompt` response
@@ -74,8 +74,8 @@ Client-facing tool cards stay compact: long strings in `rawInput`/`rawOutput` (a
 | Tool | Runs on | Permission behavior | Description |
 |------|---------|---------------------|-------------|
 | `read_file` | Agent process | Always silent | Read a text file, paginated by offset/limit (default 2000 lines, capped at 5000); the result reports the shown range, advertises the next offset only while lines remain, and reports EOF past the last line |
-| `write_file` | Agent process (ACP client `fs` when advertised) | Mode-dependent | Write or overwrite a text file. Silent in `accept_edits` and `bypass_permissions`. |
-| `edit_file` | Agent process (ACP client `fs` when advertised) | Mode-dependent | Replace one exact, unique snippet in an existing file — a surgical edit instead of a full rewrite. Re-reads and re-validates after the permission prompt so concurrent edits are not overwritten. Silent in `accept_edits` and `bypass_permissions`. |
+| `write_file` | Agent process (ACP client `fs` when advertised) | Mode-dependent | Create a new text file, or fully rewrite an existing one with `overwrite: true`. Silent in `accept_edits` and `bypass_permissions`. |
+| `edit_file` | Agent process (ACP client `fs` when advertised) | Mode-dependent | Surgical find-and-replace in an existing file (`old_string`/`new_string`, optional `replace_all`). Re-reads and re-validates after the permission prompt so concurrent edits are not overwritten. Silent in `accept_edits` and `bypass_permissions`. |
 | `todowrite` | Agent process | Always silent | Create or replace the session's structured task list so multi-step progress is tracked instead of narrated in chat. Each call replaces the list; the tool result renders it back to the model. |
 | `list_files` | Agent process | Always silent | List a directory using Node filesystem APIs |
 | `run_command` | Agent process | Mode-dependent | Run an arbitrary shell command. Silent only in `bypass_permissions`. |
@@ -87,7 +87,7 @@ Client-facing tool cards stay compact: long strings in `rawInput`/`rawOutput` (a
 
 Clients can use `session/set_mode` to drive the permission policy:
 
-| Mode ID | Name | `write_file` | `run_command` |
+| Mode ID | Name | `write_file` / `edit_file` | `run_command` |
 |---|---|---|---|
 | `default` | Ask for permission | **Prompt** | **Prompt** |
 | `accept_edits` | Auto-approve edits | Silent | **Prompt** |
@@ -457,7 +457,7 @@ The test suite covers:
 - Token usage reporting on the `PromptResponse`
 - Tool call lifecycle (`pending` → `in_progress` → `completed` / `failed`)
 - Agent-owned local file and shell tools that work without ACP `fs` / `terminal` client capabilities
-- Permission flows for `write_file` and `run_command` (allow / reject / cancel)
+- Permission flows for `write_file`, `edit_file`, and `run_command` (allow / reject / cancel)
 - Shell-quoted argument handling for `list_files` and `run_command`
 - GLM streaming: text deltas, `reasoning_content` deltas, multi-chunk tool-call assembly, and trailing usage
 - Image preprocessing through a mocked Vision MCP client and graceful degradation on Vision MCP failures
