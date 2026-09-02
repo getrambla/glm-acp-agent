@@ -329,7 +329,7 @@ export class ToolExecutor {
     }
 
     if (oldText !== undefined && overwrite !== true) {
-      const message = `Error writing file: refusing to overwrite ${path}. Use edit_file for surgical changes to an existing file, or pass overwrite: true for a deliberate full rewrite.`;
+      const message = `Error writing file: refusing to overwrite ${path}. If this is a small change, use edit_file instead. If you truly need a whole-file rewrite, STOP and ask the user: "May I overwrite ${path} entirely, and why is write_file the right tool here instead of edit_file?" Do NOT delete/recreate the file, copy over it, or use any shell workaround to dodge this guard — that hides the change from the user. The overwrite flag exists so the user can see a whole-file replacement coming; if the user approves, pass overwrite: true.`;
       await this.markFailed(toolCallId, message);
       return { content: message };
     }

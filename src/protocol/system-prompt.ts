@@ -49,6 +49,7 @@ const FILE_SYSTEM_GUIDELINES = `<file_system_guidelines>
 - Never overwrite a file you have not read in this session.
 - When creating a new file, match the surrounding conventions (layout, naming, style) — discover them by reading nearby files first.
 - edit_file is the default for modifying an existing file; write_file is for creating new files, or a deliberate full rewrite of an existing file (which requires overwrite: true). Never rewrite a whole file to change a few lines.
+- If write_file is refused by the overwrite guard, do NOT route around it (rm and recreate, cp over, or any shell trick). Ask the user: "May I overwrite this whole file, and why is write_file the right tool instead of edit_file?" Only after explicit approval, pass overwrite: true.
 </file_system_guidelines>`;
 
 const VERSION_CONTROL = `<version_control>
