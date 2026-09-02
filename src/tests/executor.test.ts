@@ -1166,6 +1166,12 @@ test("write_file converts requestPermission transport errors into a failed tool 
     async sessionUpdate(payload: Record<string, unknown>) {
       this.updates.push(payload);
     },
+    async readTextFile(): Promise<never> {
+      // The pre-write diff probe: /y.txt does not exist, so report it as new.
+      const err = new Error("ENOENT: no such file or directory") as NodeJS.ErrnoException;
+      err.code = "ENOENT";
+      throw err;
+    },
     async writeTextFile() {
       throw new Error("should not be called");
     },

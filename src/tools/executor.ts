@@ -304,7 +304,23 @@ export class ToolExecutor {
     }
     const absolutePath = this.resolvePath(path);
 
-    // Step 1: announce the pending tool call so the client can show it.
+    // Step 0: read the file we are about to overwrite so the tool call can
+    // show an honest old-vs-new diff. ENOENT just means the file is new;
+    // anything else (permissions, ...) is a real problem — fail the call.
+    let oldText: string | undefined;
+    try {
+      oldText = await this.performRead(absolutePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
+        const message = err instanceof Error ? err.message : String(err);
+        const full = `Error writing file: cannot read existing file before overwrite: ${message}`;
+        await this.markFailed(toolCallId, full);
+        return { content: full };
+      }
+    }
+
+    // Step 1: announce the pending tool call so the client can show the diff
+    // before approval.
     await this.connection.sessionUpdate({
       sessionId: this.sessionId,
       update: {
@@ -315,6 +331,14 @@ export class ToolExecutor {
         status: "pending",
         locations: [{ path }],
         rawInput: elideForPreview(args),
+        content: [
+          {
+            type: "diff",
+            path: absolutePath,
+            ...(oldText !== undefined ? { oldText } : {}),
+            newText: content,
+          },
+        ],
       },
     });
 
@@ -362,6 +386,17 @@ export class ToolExecutor {
           sessionUpdate: "tool_call_update",
           toolCallId,
           status: "completed",
+          // The diff block is the tool's user-facing content. No text block:
+          // the daemon renders tool text as a unified diff, so a success
+          // sentence would show up as a pseudo-diff.
+          content: [
+            {
+              type: "diff",
+              path: absolutePath,
+              ...(oldText !== undefined ? { oldText } : {}),
+              newText: content,
+            },
+          ],
           rawOutput: { success: true },
         },
       });
