@@ -72,6 +72,81 @@ function elideForPreview(value: unknown): unknown {
   return value;
 }
 
+const UNIFIED_DIFF_CONTEXT_LINES = 3;
+
+// Hunk-trimmed unified diff. Emitted as the edit tool's text content so
+// clients render just the changed region instead of diffing the entire file.
+export function buildUnifiedDiff(oldText: string, newText: string): string {
+  // The empty string and a bare trailing newline both produce a phantom
+  // line under split("\n") — normalize to real lines only.
+  const toLines = (text: string) => (text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+  const a = toLines(oldText);
+  const b = toLines(newText);
+  const m = a.length;
+  const n = b.length;
+
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+  for (let i = m - 1; i >= 0; i -= 1) {
+    for (let j = n - 1; j >= 0; j -= 1) {
+      dp[i][j] =
+        a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  type Op = { type: "same" | "del" | "add"; line: string };
+  const ops: Op[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      ops.push({ type: "same", line: a[i] });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ type: "del", line: a[i] });
+      i += 1;
+    } else {
+      ops.push({ type: "add", line: b[j] });
+      j += 1;
+    }
+  }
+  while (i < m) {
+    ops.push({ type: "del", line: a[i] });
+    i += 1;
+  }
+  while (j < n) {
+    ops.push({ type: "add", line: b[j] });
+    j += 1;
+  }
+
+  if (ops.every((op) => op.type === "same")) return "";
+
+  // Keep an op only when a changed op sits within the context window.
+  const changed = ops.map((op) => op.type !== "same");
+  const keep = changed.map((_, k) =>
+    changed.some((isChanged, w) => Math.abs(w - k) <= UNIFIED_DIFF_CONTEXT_LINES && isChanged)
+  );
+
+  const hunks: string[] = [];
+  let k = 0;
+  while (k < ops.length) {
+    if (!keep[k]) {
+      k += 1;
+      continue;
+    }
+    const lines: string[] = [];
+    while (k < ops.length && keep[k]) {
+      const op = ops[k];
+      if (op.type === "same") lines.push(` ${op.line}`);
+      else if (op.type === "del") lines.push(`-${op.line}`);
+      else lines.push(`+${op.line}`);
+      k += 1;
+    }
+    hunks.push(lines.join("\n"));
+  }
+  return hunks.join("\n");
+}
+
 export class ToolExecutor {
   constructor(
     private connection: AgentSideConnection,
@@ -609,6 +684,7 @@ export class ToolExecutor {
       return { content: full };
     }
 
+    const unifiedDiff = buildUnifiedDiff(latest, nextContent);
     const count = replaceAll ? latestOccurrences : 1;
     await this.connection.sessionUpdate({
       sessionId: this.sessionId,
@@ -623,6 +699,11 @@ export class ToolExecutor {
             oldText: latest,
             newText: nextContent,
           },
+          // Clients that map text content to a unified diff render only the
+          // changed hunks instead of an LCS diff over the whole file.
+          ...(unifiedDiff
+            ? [{ type: "text" as const, text: unifiedDiff }]
+            : []),
         ],
         rawOutput: { success: true, replacements: count },
       },
