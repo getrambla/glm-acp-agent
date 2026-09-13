@@ -901,9 +901,10 @@ test("newSession returns configOptions with thought_level selector for default m
   const tl = result.configOptions!.find((o) => o.category === "thought_level");
   assert.ok(tl, "thought_level option should exist");
   assert.equal(tl!.type, "select");
-  // Default model is glm-5.3 → the full effort ladder, defaulting to max.
+  // Default model is glm-5.3 → the full effort ladder, defaulting to minimal
+  // so new sessions (and daemon-spawned sub-agents) don't think at max.
   // There is no "Off" level because thinking cannot be disabled on 5.3.
-  assert.equal(tl!.currentValue, "max");
+  assert.equal(tl!.currentValue, "minimal");
   const options = (tl as { options: Array<{ value: string; name: string }> }).options;
   assert.deepEqual(
     options.map((o) => o.value),
@@ -989,7 +990,7 @@ test("switching model updates thought_level options via config_option_update", a
   await agent.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
   const { sessionId } = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
 
-  // Start with glm-5.3 (default) → max, options = the full effort ladder.
+  // Start with glm-5.3 (default) → minimal, options = the full effort ladder.
   // Switch to glm-4.7 → thoughtLevel should resolve to "on".
   await agent.unstable_setSessionModel({ sessionId, modelId: "glm-4.7" });
 
@@ -1053,7 +1054,7 @@ test("setSessionConfigOption('model') switches the model, re-clamps thought leve
 
     const model = result.configOptions.find((o) => o.id === "model");
     assert.equal(model!.currentValue, "glm-4.7");
-    // 5.3-family "max" is invalid on 4.7 — must have been clamped to "on".
+    // 5.3-family "minimal" is invalid on 4.7 — must have been clamped to "on".
     const tl = result.configOptions.find((o) => o.id === "thought_level");
     assert.equal(tl!.currentValue, "on");
     // The other options are returned unchanged.
@@ -1192,9 +1193,9 @@ test("setSessionConfigOption('mode') switches the mode, persists it, and emits c
 
     const mode = result.configOptions.find((o) => o.id === "mode");
     assert.equal(mode!.currentValue, "accept_edits");
-    // The other option is returned unchanged.
+    // The other option is returned unchanged (newSession default = minimal).
     const tl = result.configOptions.find((o) => o.id === "thought_level");
-    assert.equal(tl!.currentValue, "max");
+    assert.equal(tl!.currentValue, "minimal");
 
     assert.equal(store.load(sessionId)?.mode, "accept_edits");
 
@@ -1345,7 +1346,7 @@ test("model switch persists model + clamped thoughtLevel before any prompt (fork
     await agent.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
     const { sessionId } = await agent.newSession({ cwd: "/tmp", mcpServers: [] });
 
-    // Switch model with no prompt in between: glm-5.3/max → glm-4.7, which
+    // Switch model with no prompt in between: glm-5.3/minimal → glm-4.7, which
     // clamps the level to "on". Both must survive a fork that reads from disk.
     await agent.unstable_setSessionModel({ sessionId, modelId: "glm-4.7" });
 
@@ -1448,7 +1449,7 @@ test("newSession advertises an ACP_GLM_MODEL override that is not in the built-i
   }
 });
 
-test("a persisted 'none' level clamps up to max when the session is on glm-5.3", async () => {
+test("a persisted 'none' level clamps down to minimal when the session is on glm-5.3", async () => {
   const dir = mkdtempSync(pathJoin(osTmpdir(), "glm-acp-clamp-"));
   const sessionId = "abcd1234-abcd-abcd-abcd-abcdabcd5353";
   try {
@@ -1474,7 +1475,7 @@ test("a persisted 'none' level clamps up to max when the session is on glm-5.3",
     const result = await agent.loadSession({ sessionId, cwd: "/tmp", mcpServers: [] });
 
     const tl = result.configOptions!.find((o) => o.id === "thought_level");
-    assert.equal(tl!.currentValue, "max");
+    assert.equal(tl!.currentValue, "minimal");
     assert.deepEqual(
       (tl as { options: Array<{ value: string }> }).options.map((o) => o.value),
       ["minimal", "low", "medium", "high", "xhigh", "max"]

@@ -390,10 +390,12 @@ export class GlmAcpAgent implements Agent {
     };
 
     const model = getDefaultModel();
-    // Default to the model's own default effort ("max" on the 5.3 family,
-    // "on" otherwise) so out-of-the-box behaviour matches the pre-thought-level
-    // default (thinking on, no explicit reasoning_effort).
-    const thoughtLevel = resolveThoughtLevel(model, "max");
+    // Default to minimal effort: deep thinking on short-lived sessions (and
+    // especially daemon-spawned sub-agents) burns time and correlates with
+    // turns that end prematurely, so the out-of-the-box level is the cheapest
+    // one. Per-session control is unchanged via the thought_level config
+    // option.
+    const thoughtLevel = resolveThoughtLevel(model, "minimal");
 
     this.sessions.set(sessionId, {
       cwd: params.cwd,
@@ -985,7 +987,7 @@ export class GlmAcpAgent implements Agent {
       toolDefinitions,
       mcpTools,
       mode: persisted.mode,
-      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
       commands: discoverSlashCommands(params.cwd),
       displayText: deserializeDisplayText(persisted.messages, persisted.displayText),
     };
@@ -1040,7 +1042,7 @@ export class GlmAcpAgent implements Agent {
       toolDefinitions,
       mcpTools,
       mode: persisted.mode,
-      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
       commands: discoverSlashCommands(params.cwd),
       // Re-key onto the cloned messages: the parent's map is keyed by the
       // originals, which the fork no longer holds.
@@ -1085,7 +1087,7 @@ export class GlmAcpAgent implements Agent {
       toolDefinitions,
       mcpTools,
       mode: persisted.mode,
-      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+      thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
       commands: discoverSlashCommands(params.cwd),
       displayText: deserializeDisplayText(persisted.messages, persisted.displayText),
     };

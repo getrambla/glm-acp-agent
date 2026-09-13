@@ -388,11 +388,13 @@ test("resolveThoughtLevel clamps invalid levels to the model default", () => {
   assert.equal(resolveThoughtLevel("glm-4.7", "none"), "none");
 });
 
-test("resolveThoughtLevel clamps a persisted none up to max on glm-5.3", () => {
+test("resolveThoughtLevel clamps a persisted none down to minimal on glm-5.3", () => {
   // A session saved on a model where "Off" was valid must still load cleanly
-  // when switched to glm-5.3, which has no "none" level.
-  assert.equal(resolveThoughtLevel("glm-5.3", "none"), "max");
-  assert.equal(resolveThoughtLevel("glm-5.3", "on"), "max");
+  // when switched to glm-5.3, which has no "none" level. The clamp now goes
+  // to the cheapest level, not the deepest — a stale "none" should not make
+  // a restored session think at max effort.
+  assert.equal(resolveThoughtLevel("glm-5.3", "none"), "minimal");
+  assert.equal(resolveThoughtLevel("glm-5.3", "on"), "minimal");
 });
 
 test("resolveThoughtLevel maps the 5.3 ladder onto Flash's three levels", () => {
