@@ -3,8 +3,8 @@ import type {
   ClientCapabilities,
 } from "@agentclientprotocol/sdk";
 import { spawn } from "node:child_process";
-import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as pathJoin, resolve as pathResolve } from "node:path";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join as pathJoin, resolve as pathResolve } from "node:path";
 import { resolveApiKey } from "../llm/credentials.js";
 import {
   callZaiMcpTool,
@@ -398,6 +398,7 @@ export class ToolExecutor {
     });
 
     try {
+      await mkdir(dirname(absolutePath), { recursive: true });
       await this.performWrite(absolutePath, content);
 
       await this.connection.sessionUpdate({
