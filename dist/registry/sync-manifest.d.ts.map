@@ -1,0 +1,1 @@
+{"version":3,"file":"sync-manifest.d.ts","sourceRoot":"","sources":["../../src/registry/sync-manifest.ts"],"names":[],"mappings":"AAMA,0DAA0D;AAC1D,MAAM,WAAW,eAAe;IAC9B,IAAI,EAAE,MAAM,CAAC;IACb,OAAO,EAAE,MAAM,CAAC;CACjB;AAOD;;;;;;;;;;;;GAYG;AACH,wBAAgB,mBAAmB,CACjC,OAAO,EAAE,MAAM,EACf,GAAG,EAAE,eAAe,GACnB,MAAM,CAoBR"}
