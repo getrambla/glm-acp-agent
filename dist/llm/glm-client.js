@@ -70,10 +70,11 @@ export function getThoughtLevels(model) {
  * Resolve a stored ThoughtLevel to one that's valid for the given model.
  * Used when switching models or restoring a persisted session: if the old
  * level isn't in the new model's option list, fall back to the model's
- * default (max on 5.3 / Flash, on for everything else — the last entry in
- * the list). Switching from GLM-5.3 onto Flash maps the six-rung ladder
- * onto Flash's three documented values rather than collapsing everything
- * to max.
+ * cheapest level rather than a deep one (max on 5.3 / Flash was the old
+ * fallback and made restored sessions think excessively — see the
+ * newSession default). Switching from GLM-5.3 onto Flash maps the six-rung
+ * ladder onto Flash's three documented values rather than collapsing
+ * everything to max.
  */
 export function resolveThoughtLevel(model, level) {
     const valid = getThoughtLevels(model);
@@ -86,7 +87,11 @@ export function resolveThoughtLevel(model, level) {
             return "high";
         return "max";
     }
-    return valid[valid.length - 1];
+    if (valid.includes("minimal"))
+        return "minimal";
+    if (valid.includes("on"))
+        return "on";
+    return valid[0];
 }
 /** Default base URL for the Z.AI / Zhipu OpenAI-compatible API (Coding endpoint). */
 const DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4";

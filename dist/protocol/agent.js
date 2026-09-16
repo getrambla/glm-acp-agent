@@ -227,10 +227,12 @@ export class GlmAcpAgent {
             }),
         };
         const model = getDefaultModel();
-        // Default to the model's own default effort ("max" on the 5.3 family,
-        // "on" otherwise) so out-of-the-box behaviour matches the pre-thought-level
-        // default (thinking on, no explicit reasoning_effort).
-        const thoughtLevel = resolveThoughtLevel(model, "max");
+        // Default to minimal effort: deep thinking on short-lived sessions (and
+        // especially daemon-spawned sub-agents) burns time and correlates with
+        // turns that end prematurely, so the out-of-the-box level is the cheapest
+        // one. Per-session control is unchanged via the thought_level config
+        // option.
+        const thoughtLevel = resolveThoughtLevel(model, "minimal");
         this.sessions.set(sessionId, {
             cwd: params.cwd,
             messages: [systemPrompt],
@@ -247,6 +249,7 @@ export class GlmAcpAgent {
             displayText: new WeakMap(),
         });
         this.scheduleAvailableCommands(sessionId);
+        this.scheduleUsageUpdate(sessionId);
         return {
             sessionId,
             models: this.modelsState(model),
@@ -279,6 +282,28 @@ export class GlmAcpAgent {
                 update: {
                     sessionUpdate: "available_commands_update",
                     availableCommands: availableCommandsState(session.commands),
+                },
+            });
+        }, 0);
+    }
+    /**
+     * Queue a `usage_update` snapshot so clients show the context meter as soon
+     * as they attach — new, loaded, resumed, or forked — instead of only after
+     * the first prompt completes. `used` is an estimate of the current history
+     * (the API reports exact usage only with a completion); the first prompt's
+     * real usage replaces it.
+     */
+    scheduleUsageUpdate(sessionId) {
+        setTimeout(() => {
+            const session = this.sessions.get(sessionId);
+            if (!session)
+                return;
+            void safeSessionUpdate(this.connection, {
+                sessionId,
+                update: {
+                    sessionUpdate: "usage_update",
+                    used: estimateTokens(session.messages),
+                    size: getContextWindow(session.model),
                 },
             });
         }, 0);
@@ -717,7 +742,7 @@ export class GlmAcpAgent {
             toolDefinitions,
             mcpTools,
             mode: persisted.mode,
-            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
             commands: discoverSlashCommands(params.cwd),
             displayText: deserializeDisplayText(persisted.messages, persisted.displayText),
         };
@@ -727,6 +752,7 @@ export class GlmAcpAgent {
         // doesn't render them on its own.
         await this.replayMessages(params.sessionId, persisted.messages, restored.displayText);
         this.scheduleAvailableCommands(params.sessionId);
+        this.scheduleUsageUpdate(params.sessionId);
         return {
             models: this.modelsState(persisted.model),
             modes: this.modesState(persisted.mode),
@@ -755,7 +781,7 @@ export class GlmAcpAgent {
             toolDefinitions,
             mcpTools,
             mode: persisted.mode,
-            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
             commands: discoverSlashCommands(params.cwd),
             // Re-key onto the cloned messages: the parent's map is keyed by the
             // originals, which the fork no longer holds.
@@ -766,6 +792,7 @@ export class GlmAcpAgent {
         // Notify on the *created* session id — the parent thread's command list is
         // unchanged and a notify there would repaint the wrong menu.
         this.scheduleAvailableCommands(newSessionId);
+        this.scheduleUsageUpdate(newSessionId);
         return {
             sessionId: newSessionId,
             models: this.modelsState(forked.model),
@@ -789,12 +816,13 @@ export class GlmAcpAgent {
             toolDefinitions,
             mcpTools,
             mode: persisted.mode,
-            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "max"),
+            thoughtLevel: resolveThoughtLevel(persisted.model, persisted.thoughtLevel ?? "minimal"),
             commands: discoverSlashCommands(params.cwd),
             displayText: deserializeDisplayText(persisted.messages, persisted.displayText),
         };
         this.sessions.set(params.sessionId, restored);
         this.scheduleAvailableCommands(params.sessionId);
+        this.scheduleUsageUpdate(params.sessionId);
         // Resume does NOT replay history — the client keeps its own UI state and
         // just wants the agent to pick up where it left off.
         return {
@@ -946,6 +974,17 @@ export class GlmAcpAgent {
                     }
                     if (chunk.usage) {
                         lastUsage = chunk.usage;
+                        // Stream live context-window usage (ACP `usage_update`). The final
+                        // usage chunk's inputTokens is the full prompt sent this call, i.e.
+                        // the context currently held by the session.
+                        void safeSessionUpdate(this.connection, {
+                            sessionId,
+                            update: {
+                                sessionUpdate: "usage_update",
+                                used: chunk.usage.inputTokens,
+                                size: getContextWindow(session.model),
+                            },
+                        });
                     }
                     if (chunk.done) {
                         lastStopReason = chunk.stopReason;

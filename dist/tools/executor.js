@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
-import { join as pathJoin, resolve as pathResolve } from "node:path";
+import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join as pathJoin, resolve as pathResolve } from "node:path";
 import { resolveApiKey } from "../llm/credentials.js";
 import { callZaiMcpTool, ZAI_WEB_READER_MCP_ENDPOINT, ZAI_WEB_SEARCH_MCP_ENDPOINT, } from "./zai-mcp-client.js";
 /** Default page size for read_file results fed back to the model. */
@@ -38,6 +38,77 @@ function elideForPreview(value) {
         return out;
     }
     return value;
+}
+const UNIFIED_DIFF_CONTEXT_LINES = 3;
+// Hunk-trimmed unified diff. Emitted as the edit tool's text content so
+// clients render just the changed region instead of diffing the entire file.
+export function buildUnifiedDiff(oldText, newText) {
+    // The empty string and a bare trailing newline both produce a phantom
+    // line under split("\n") — normalize to real lines only.
+    const toLines = (text) => (text === "" ? [] : text.replace(/\n$/, "").split("\n"));
+    const a = toLines(oldText);
+    const b = toLines(newText);
+    const m = a.length;
+    const n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = m - 1; i >= 0; i -= 1) {
+        for (let j = n - 1; j >= 0; j -= 1) {
+            dp[i][j] =
+                a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+    }
+    const ops = [];
+    let i = 0;
+    let j = 0;
+    while (i < m && j < n) {
+        if (a[i] === b[j]) {
+            ops.push({ type: "same", line: a[i] });
+            i += 1;
+            j += 1;
+        }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) {
+            ops.push({ type: "del", line: a[i] });
+            i += 1;
+        }
+        else {
+            ops.push({ type: "add", line: b[j] });
+            j += 1;
+        }
+    }
+    while (i < m) {
+        ops.push({ type: "del", line: a[i] });
+        i += 1;
+    }
+    while (j < n) {
+        ops.push({ type: "add", line: b[j] });
+        j += 1;
+    }
+    if (ops.every((op) => op.type === "same"))
+        return "";
+    // Keep an op only when a changed op sits within the context window.
+    const changed = ops.map((op) => op.type !== "same");
+    const keep = changed.map((_, k) => changed.some((isChanged, w) => Math.abs(w - k) <= UNIFIED_DIFF_CONTEXT_LINES && isChanged));
+    const hunks = [];
+    let k = 0;
+    while (k < ops.length) {
+        if (!keep[k]) {
+            k += 1;
+            continue;
+        }
+        const lines = [];
+        while (k < ops.length && keep[k]) {
+            const op = ops[k];
+            if (op.type === "same")
+                lines.push(` ${op.line}`);
+            else if (op.type === "del")
+                lines.push(`-${op.line}`);
+            else
+                lines.push(`+${op.line}`);
+            k += 1;
+        }
+        hunks.push(lines.join("\n"));
+    }
+    return hunks.join("\n");
 }
 export class ToolExecutor {
     connection;
@@ -240,8 +311,41 @@ export class ToolExecutor {
         if (!path) {
             return this.failAndReturn(toolCallId, "write_file", args, "Error: `path` is required.");
         }
+        const overwrite = args["overwrite"];
+        if (overwrite !== undefined && typeof overwrite !== "boolean") {
+            return this.failAndReturn(toolCallId, "write_file", args, "Error: `overwrite` must be a boolean when provided.");
+        }
         const absolutePath = this.resolvePath(path);
-        // Step 1: announce the pending tool call so the client can show it.
+        // Step 0: read the file we are about to overwrite so the tool call can
+        // show an honest old-vs-new diff. ENOENT just means the file is new;
+        // anything else (permissions, ...) is a real problem — fail the call. A
+        // client fs read reports one plain error for both cases, so that
+        // distinction only exists on the local-disk path.
+        let oldText;
+        try {
+            oldText = await this.performRead(absolutePath);
+        }
+        catch (err) {
+            if (!this.readsThroughClient &&
+                err?.code !== "ENOENT") {
+                const message = err instanceof Error ? err.message : String(err);
+                const full = `Error writing file: cannot read existing file before overwrite: ${message}`;
+                await this.markFailed(toolCallId, full);
+                return { content: full };
+            }
+        }
+        if (oldText !== undefined && overwrite !== true) {
+            const message = `Error writing file: refusing to overwrite ${path}. If this is a small change, use edit_file instead. If you truly need a whole-file rewrite, STOP and ask the user: "May I overwrite ${path} entirely, and why is write_file the right tool here instead of edit_file?" Do NOT delete/recreate the file, copy over it, or use any shell workaround to dodge this guard — that hides the change from the user. The overwrite flag exists so the user can see a whole-file replacement coming; if the user approves, pass overwrite: true.`;
+            await this.markFailed(toolCallId, message);
+            return { content: message };
+        }
+        if (oldText === undefined && overwrite !== undefined) {
+            const message = `Error writing file: bad move — you passed overwrite when ${path} does not exist. That is a bad habit forming; do not reach for the escape hatch by default. Omit overwrite for new files.`;
+            await this.markFailed(toolCallId, message);
+            return { content: message };
+        }
+        // Step 1: announce the pending tool call so the client can show the diff
+        // before approval.
         await this.connection.sessionUpdate({
             sessionId: this.sessionId,
             update: {
@@ -252,6 +356,14 @@ export class ToolExecutor {
                 status: "pending",
                 locations: [{ path }],
                 rawInput: elideForPreview(args),
+                content: [
+                    {
+                        type: "diff",
+                        path: absolutePath,
+                        ...(oldText !== undefined ? { oldText } : {}),
+                        newText: content,
+                    },
+                ],
             },
         });
         // Step 2: request user permission based on the current session mode. The
@@ -287,6 +399,7 @@ export class ToolExecutor {
             },
         });
         try {
+            await mkdir(dirname(absolutePath), { recursive: true });
             await this.performWrite(absolutePath, content);
             await this.connection.sessionUpdate({
                 sessionId: this.sessionId,
@@ -294,6 +407,17 @@ export class ToolExecutor {
                     sessionUpdate: "tool_call_update",
                     toolCallId,
                     status: "completed",
+                    // The diff block is the tool's user-facing content. No text block:
+                    // the daemon renders tool text as a unified diff, so a success
+                    // sentence would show up as a pseudo-diff.
+                    content: [
+                        {
+                            type: "diff",
+                            path: absolutePath,
+                            ...(oldText !== undefined ? { oldText } : {}),
+                            newText: content,
+                        },
+                    ],
                     rawOutput: { success: true },
                 },
             });
@@ -327,24 +451,32 @@ export class ToolExecutor {
      * read-without-write capability falls back to plain agent-process disk I/O.
      */
     async performRead(path) {
-        if (this.clientCapabilities?.fs?.readTextFile &&
-            this.clientCapabilities?.fs?.writeTextFile) {
+        if (this.readsThroughClient) {
             const response = await this.connection.readTextFile({ sessionId: this.sessionId, path });
             return response.content;
         }
         return readFile(path, "utf8");
     }
+    /** Whether performRead goes to the client rather than to local disk. */
+    get readsThroughClient() {
+        return Boolean(this.clientCapabilities?.fs?.readTextFile && this.clientCapabilities?.fs?.writeTextFile);
+    }
     async editFile(toolCallId, args) {
         const path = String(args["path"] ?? "").trim();
-        const oldText = String(args["old_text"] ?? "");
-        const newText = String(args["new_text"] ?? "");
         if (!path) {
             return this.failAndReturn(toolCallId, "edit_file", args, "Error: `path` is required.");
         }
-        if (oldText.length === 0) {
-            return this.failAndReturn(toolCallId, "edit_file", args, "Error: `old_text` is required and must be a non-empty exact snippet from the file.");
+        const oldString = args["old_string"];
+        if (typeof oldString !== "string" || oldString.length === 0) {
+            return this.failAndReturn(toolCallId, "edit_file", args, "Error: `old_string` is required and must be a non-empty string (creating content is write_file's job).");
         }
+        const newString = args["new_string"];
+        if (typeof newString !== "string") {
+            return this.failAndReturn(toolCallId, "edit_file", args, "Error: `new_string` is required and must be a string (use \"\" to delete the matched text).");
+        }
+        const replaceAll = args["replace_all"] === true;
         const absolutePath = this.resolvePath(path);
+        // Step 1: announce the pending tool call so the client can show it.
         await this.connection.sessionUpdate({
             sessionId: this.sessionId,
             update: {
@@ -357,30 +489,36 @@ export class ToolExecutor {
                 rawInput: elideForPreview(args),
             },
         });
+        // Step 2: read and match before prompting, so the user is never asked to
+        // approve an edit that cannot apply.
         let current;
         try {
             current = await this.performRead(absolutePath);
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            await this.markFailed(toolCallId, message);
-            return { content: `Error editing file: cannot read ${path}: ${message}` };
+            const code = err?.code;
+            const hint = code === "ENOENT"
+                ? " File does not exist — use write_file to create it, or re-check the path."
+                : "";
+            const full = `Error editing file: ${message}.${hint}`;
+            await this.markFailed(toolCallId, full);
+            return { content: full };
         }
-        const occurrences = current.split(oldText).length - 1;
+        const occurrences = current.split(oldString).length - 1;
         if (occurrences === 0) {
-            await this.markFailed(toolCallId, "old_text not found in file");
-            return {
-                content: `Error editing file: \`old_text\` was not found in ${path}. Re-read the file and copy the snippet exactly, including whitespace.`,
-            };
+            const message = "Error editing file: `old_string` not found in the file. It may have changed since you read it — re-read the file first, then retry with the exact current text.";
+            await this.markFailed(toolCallId, message);
+            return { content: message };
         }
-        if (occurrences > 1) {
-            await this.markFailed(toolCallId, `old_text matches ${occurrences} locations`);
-            return {
-                content: `Error editing file: \`old_text\` occurs ${occurrences} times in ${path}. Add surrounding lines to make it unique, then retry.`,
-            };
+        if (occurrences > 1 && !replaceAll) {
+            const message = `Error editing file: found ${occurrences} matches for \`old_string\`. Include more surrounding lines to make it unique, or pass replace_all: true to replace every occurrence.`;
+            await this.markFailed(toolCallId, message);
+            return { content: message };
         }
-        // Full payload in the prompt — the user approves the exact edit (see
-        // writeFile; elision is for sessionUpdate cards only).
+        // Step 3: request user permission based on the current session mode. The
+        // prompt carries the full payload — an approval decides on exactly this
+        // edit, so elision is reserved for sessionUpdate UI cards (step 1).
         const permissionResult = await this.maybeRequestPermission({
             toolCallId,
             kind: "write",
@@ -401,9 +539,9 @@ export class ToolExecutor {
             await this.markFailed(toolCallId, "Rejected by user.");
             return { content: "Edit rejected by user." };
         }
-        // The permission prompt can sit in front of the user for a while; re-read
-        // and re-validate so a buffer edited while deciding is not silently
-        // overwritten by this stale snapshot.
+        // Step 4: the permission prompt can sit in front of the user for a while;
+        // re-read and re-validate so a file edited while deciding is not clobbered
+        // by this stale snapshot.
         let latest;
         try {
             latest = await this.performRead(absolutePath);
@@ -413,16 +551,17 @@ export class ToolExecutor {
             await this.markFailed(toolCallId, message);
             return { content: `Error editing file: cannot re-read ${path}: ${message}` };
         }
-        const latestOccurrences = latest.split(oldText).length - 1;
-        if (latestOccurrences !== 1) {
+        const latestOccurrences = latest.split(oldString).length - 1;
+        if (latestOccurrences === 0 || (latestOccurrences > 1 && !replaceAll)) {
             const reason = latestOccurrences === 0
-                ? "`old_text` is no longer present"
-                : `\`old_text\` now occurs ${latestOccurrences} times`;
+                ? "`old_string` is no longer present"
+                : `\`old_string\` now occurs ${latestOccurrences} times`;
             await this.markFailed(toolCallId, `file changed while waiting for permission (${reason})`);
             return {
                 content: `Error editing file: ${path} changed while waiting for permission (${reason}). Re-read the file and retry.`,
             };
         }
+        // Step 5: move to in_progress and execute.
         await this.connection.sessionUpdate({
             sessionId: this.sessionId,
             update: {
@@ -431,24 +570,47 @@ export class ToolExecutor {
                 status: "in_progress",
             },
         });
+        const nextContent = replaceAll
+            ? latest.split(oldString).join(newString)
+            : latest.replace(oldString, newString);
+        // Step 6: write, and only report completion once the write resolved so a
+        // failed write never shows a completed diff that did not happen.
         try {
-            await this.performWrite(absolutePath, latest.replace(oldText, newText));
-            await this.connection.sessionUpdate({
-                sessionId: this.sessionId,
-                update: {
-                    sessionUpdate: "tool_call_update",
-                    toolCallId,
-                    status: "completed",
-                    rawOutput: { success: true },
-                },
-            });
-            return { content: `File edited successfully: ${path}` };
+            await this.performWrite(absolutePath, nextContent);
         }
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
-            await this.markFailed(toolCallId, message);
-            return { content: `Error editing file: ${message}` };
+            const full = `Error editing file: ${message}`;
+            await this.markFailed(toolCallId, full);
+            return { content: full };
         }
+        const unifiedDiff = buildUnifiedDiff(latest, nextContent);
+        const count = replaceAll ? latestOccurrences : 1;
+        await this.connection.sessionUpdate({
+            sessionId: this.sessionId,
+            update: {
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+                status: "completed",
+                content: [
+                    {
+                        type: "diff",
+                        path: absolutePath,
+                        oldText: latest,
+                        newText: nextContent,
+                    },
+                    // Clients that map text content to a unified diff render only the
+                    // changed hunks instead of an LCS diff over the whole file.
+                    ...(unifiedDiff
+                        ? [{ type: "text", text: unifiedDiff }]
+                        : []),
+                ],
+                rawOutput: { success: true, replacements: count },
+            },
+        });
+        return {
+            content: `Edited ${path}: replaced ${count} occurrence${count === 1 ? "" : "s"}.`,
+        };
     }
     async listFiles(toolCallId, args) {
         const rawPath = args["path"];

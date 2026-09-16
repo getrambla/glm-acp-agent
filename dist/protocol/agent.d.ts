@@ -77,6 +77,14 @@ export declare class GlmAcpAgent implements Agent {
      * paint the menu. Each send replaces the previous list wholesale.
      */
     private scheduleAvailableCommands;
+    /**
+     * Queue a `usage_update` snapshot so clients show the context meter as soon
+     * as they attach — new, loaded, resumed, or forked — instead of only after
+     * the first prompt completes. `used` is an estimate of the current history
+     * (the API reports exact usage only with a completion); the first prompt's
+     * real usage replaces it.
+     */
+    private scheduleUsageUpdate;
     unstable_setSessionModel(params: SetSessionModelRequest): Promise<SetSessionModelResponse>;
     /**
      * Switch a session to a new model id — shared by `session/set_model` and the

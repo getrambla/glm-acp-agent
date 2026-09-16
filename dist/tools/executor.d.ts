@@ -20,6 +20,7 @@ export interface TodoItem {
     status: "pending" | "in_progress" | "completed";
     activeForm?: string;
 }
+export declare function buildUnifiedDiff(oldText: string, newText: string): string;
 export declare class ToolExecutor {
     private connection;
     private sessionId;
@@ -56,6 +57,8 @@ export declare class ToolExecutor {
      * read-without-write capability falls back to plain agent-process disk I/O.
      */
     private performRead;
+    /** Whether performRead goes to the client rather than to local disk. */
+    private get readsThroughClient();
     private editFile;
     private listFiles;
     private runCommand;

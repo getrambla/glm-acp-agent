@@ -1,9 +1,3 @@
-/**
- * Debug logging for the GLM ACP agent.
- *
- * Set `ACP_GLM_DEBUG=true` to enable verbose logging to stderr.
- * `warn()` and `error()` always write to stderr regardless of the debug flag.
- */
 /** Log a debug message. Only writes when `ACP_GLM_DEBUG=true`. */
 export declare function debug(...args: unknown[]): void;
 /** Log a warning. Always written to stderr. */

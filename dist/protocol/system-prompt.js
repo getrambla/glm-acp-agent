@@ -10,7 +10,7 @@ Available tools: __TOOLS__
 - Working output is tool calls, not prose: do not narrate what you are about to do — the client renders each tool call as it runs. Reserve text for conclusions, answers, and questions for the user.
 - For multi-step work, maintain the task list with todowrite (mark a task in_progress before starting it, completed when finishing it) instead of describing progress in text.
 - Prefer reading before writing: when modifying a file, read it first so your edit is grounded in the current contents.
-- To change an existing file, prefer edit_file with a minimal exact snippet over write_file with the whole file: it keeps diffs surgical and avoids output-token limits.
+- To change an existing file, prefer edit_file with a minimal exact snippet over write_file with the whole file: it keeps diffs surgical and avoids output-token limits. write_file is for creating new files, or a deliberate full rewrite of an existing file (which requires overwrite: true).
 - Issue independent lookups (multiple file reads, separate searches) in parallel rather than sequentially.
 </tools>`;
 const FILE_SYSTEM_GUIDELINES = `<file_system_guidelines>
@@ -18,6 +18,8 @@ const FILE_SYSTEM_GUIDELINES = `<file_system_guidelines>
 - Prefer minimal, surgical diffs; do not reformat unrelated code.
 - Never overwrite a file you have not read in this session.
 - When creating a new file, match the surrounding conventions (layout, naming, style) — discover them by reading nearby files first.
+- edit_file is the default for modifying an existing file; write_file is for creating new files, or a deliberate full rewrite of an existing file (which requires overwrite: true). Never rewrite a whole file to change a few lines.
+- If write_file is refused by the overwrite guard, do NOT route around it (rm and recreate, cp over, or any shell trick). Ask the user: "May I overwrite this whole file, and why is write_file the right tool instead of edit_file?" Only after explicit approval, pass overwrite: true.
 </file_system_guidelines>`;
 const VERSION_CONTROL = `<version_control>
 - Treat the user's working tree as their work in progress. Do not run destructive git or shell commands on your own initiative.
