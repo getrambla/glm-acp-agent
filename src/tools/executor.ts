@@ -708,10 +708,13 @@ export class ToolExecutor {
             oldText: latest,
             newText: nextContent,
           },
-          // Clients that map text content to a unified diff render only the
-          // changed hunks instead of an LCS diff over the whole file.
           ...(unifiedDiff
-            ? [{ type: "text" as const, text: unifiedDiff }]
+            ? [
+                {
+                  type: "content" as const,
+                  content: { type: "text" as const, text: unifiedDiff } as const,
+                },
+              ]
             : []),
         ],
         rawOutput: { success: true, replacements: count },
