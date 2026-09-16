@@ -390,12 +390,17 @@ export class ToolExecutor {
 
     // Step 0: read the file we are about to overwrite so the tool call can
     // show an honest old-vs-new diff. ENOENT just means the file is new;
-    // anything else (permissions, ...) is a real problem — fail the call.
+    // anything else (permissions, ...) is a real problem — fail the call. A
+    // client fs read reports one plain error for both cases, so that
+    // distinction only exists on the local-disk path.
     let oldText: string | undefined;
     try {
       oldText = await this.performRead(absolutePath);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException | null)?.code !== "ENOENT") {
+      if (
+        !this.readsThroughClient &&
+        (err as NodeJS.ErrnoException | null)?.code !== "ENOENT"
+      ) {
         const message = err instanceof Error ? err.message : String(err);
         const full = `Error writing file: cannot read existing file before overwrite: ${message}`;
         await this.markFailed(toolCallId, full);
@@ -528,14 +533,18 @@ export class ToolExecutor {
    * read-without-write capability falls back to plain agent-process disk I/O.
    */
   private async performRead(path: string): Promise<string> {
-    if (
-      this.clientCapabilities?.fs?.readTextFile &&
-      this.clientCapabilities?.fs?.writeTextFile
-    ) {
+    if (this.readsThroughClient) {
       const response = await this.connection.readTextFile({ sessionId: this.sessionId, path });
       return response.content;
     }
     return readFile(path, "utf8");
+  }
+
+  /** Whether performRead goes to the client rather than to local disk. */
+  private get readsThroughClient(): boolean {
+    return Boolean(
+      this.clientCapabilities?.fs?.readTextFile && this.clientCapabilities?.fs?.writeTextFile
+    );
   }
 
   private async editFile(

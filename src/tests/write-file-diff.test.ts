@@ -11,6 +11,8 @@ import { ToolExecutor } from "../tools/executor.js";
 
 interface StubOptions {
   permission?: "allow" | "reject" | "cancelled";
+  /** Makes client readTextFile throw a plain error, as a real ACP client does. */
+  clientReadError?: string;
 }
 
 function createConnectionStub(opts: StubOptions = {}) {
@@ -30,6 +32,7 @@ function createConnectionStub(opts: StubOptions = {}) {
     // (ENOENT, EACCES) survive the round trip like a real client's would.
     async readTextFile({ path }: { path: string }) {
       clientReads.push(path);
+      if (opts.clientReadError) throw new Error(opts.clientReadError);
       return { content: readFileSync(path, "utf8") };
     },
     async writeTextFile({ path, content }: { path: string; content: string }) {
@@ -140,7 +143,10 @@ test("write_file creating a new file emits an additions-only diff block (no oldT
   }
 });
 
-test("write_file fails when the file exists but cannot be read", async () => {
+// Only the local-disk path can tell "missing" from "unreadable": a client fs
+// read reports one plain error for both, so it treats a failed read as a new
+// file rather than refusing the write.
+test("write_file fails when the file exists on local disk but cannot be read", async () => {
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   if (isRoot) return; // chmod-based read failure does not apply to root
   const dir = mkdtempSync(join(tmpdir(), "glm-write-diff-"));
@@ -149,16 +155,17 @@ test("write_file fails when the file exists but cannot be read", async () => {
     writeFileSync(path, "secret\n", "utf8");
     chmodSync(path, 0o000);
     const conn = createConnectionStub({ permission: "allow" });
-    const exec = new ToolExecutor(conn as never, "s1", FULL_CAPS, undefined, null, null, dir);
+    const exec = new ToolExecutor(conn as never, "s1", NO_FS_CAPS, undefined, null, null, dir);
 
     const result = await exec.execute(
       "tc1",
       "write_file",
       JSON.stringify({ path, content: "x" })
     );
-    assert.match(result.content, /Error/);
+    assert.match(result.content, /cannot read existing file before overwrite/);
     const updates = updatesOf(conn);
     assert.equal(updates.at(-1)?.status, "failed");
+    assert.equal(conn.permissionRequests.length, 0, "no prompt for a write that cannot proceed");
     // No re-read here: the file is locked; a failed call must simply not have written.
   } finally {
     chmodSync(join(dir, "locked.txt"), 0o644);
@@ -178,6 +185,27 @@ test("write_file routes the pre-write read and the write through the client fs c
     assert.deepEqual(conn.clientReads, [path], "the old-vs-new diff reads through the client");
     assert.deepEqual(conn.clientWrites, [{ path, content: "new\n" }]);
     assert.equal(readFileSync(path, "utf8"), "new\n");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("write_file still creates a new file when the client's read reports a plain error", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "glm-write-diff-"));
+  try {
+    const path = join(dir, "fresh.txt");
+    const conn = createConnectionStub({
+      permission: "allow",
+      clientReadError: `file not found: ${path}`,
+    });
+    const exec = new ToolExecutor(conn as never, "s1", FULL_CAPS, undefined, null, null, dir);
+
+    const result = await exec.execute("tc1", "write_file", JSON.stringify({ path, content: "hi\n" }));
+    assert.match(result.content, /written successfully/);
+    assert.equal(conn.permissionRequests.length, 1);
+    const [announce, , completed] = updatesOf(conn);
+    assert.equal("oldText" in (diffBlock(announce) ?? {}), false, "treated as a new file");
+    assert.equal(completed?.status, "completed");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
