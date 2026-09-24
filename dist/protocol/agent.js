@@ -218,15 +218,18 @@ export class GlmAcpAgent {
         debug(`newSession: id=${sessionId} cwd=${params.cwd} model=${getDefaultModel()}`);
         const mcpTools = await connectSessionMcpServers(params.mcpServers);
         const toolDefinitions = this.availableToolDefinitions(mcpTools);
+        // RAMBLA-FORK: feature: 2026-09-24-feat-system-prompt-self-identity.md: the prompt is told the session's provider and model.
+        const model = getDefaultModel();
         const systemPrompt = {
             role: "system",
             content: buildSystemPrompt({
                 cwd: params.cwd,
                 tools: toolDefinitions.map((tool) => tool.function.name),
+                provider: "glm-acp-agent",
+                model,
                 agentsMd: loadProjectContext(params.cwd),
             }),
         };
-        const model = getDefaultModel();
         // Default to minimal effort: deep thinking on short-lived sessions (and
         // especially daemon-spawned sub-agents) burns time and correlates with
         // turns that end prematurely, so the out-of-the-box level is the cheapest

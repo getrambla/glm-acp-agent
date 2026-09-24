@@ -18,6 +18,11 @@ export interface BuildSystemPromptInput {
   cwd: string;
   /** Names of tools available for this session, in declaration order. */
   tools: ReadonlyArray<string>;
+  // RAMBLA-FORK: feature: 2026-09-24-feat-system-prompt-self-identity.md: the prompt names its own provider and model in the environment block.
+  /** The agent provider id running this session, advertised in the environment block. */
+  provider: string;
+  /** The model name serving this session, advertised in the environment block. */
+  model: string;
   /**
    * Optional project context drawn from `AGENTS.md` (preferred) or `CLAUDE.md`.
    * Caller is responsible for capping the byte size before passing it in.
@@ -33,6 +38,7 @@ terminal that renders tool calls and prompts the user for permission before
 writes or command execution. File-system and shell operations run inside this
 agent process with paths resolved from the session working directory.`;
 
+// RAMBLA-FORK: feature: 2026-09-24-feat-system-prompt-self-identity.md: defaults subagent spawns to the model's own provider/model.
 const TOOLS_TEMPLATE = `<tools>
 Available tools: __TOOLS__
 - Use only tools listed above.
@@ -41,6 +47,7 @@ Available tools: __TOOLS__
 - Prefer reading before writing: when modifying a file, read it first so your edit is grounded in the current contents.
 - To change an existing file, prefer edit_file with a minimal exact snippet over write_file with the whole file: it keeps diffs surgical and avoids output-token limits. write_file is for creating new files, or a deliberate full rewrite of an existing file (which requires overwrite: true).
 - Issue independent lookups (multiple file reads, separate searches) in parallel rather than sequentially.
+- When spawning subagents, the model's own provider and model (see <environment>) are the default: omit the provider argument rather than looking it up; specify one only when the user asks, and if provider/model listing tools are available, verify the requested one there, otherwise use the user's naming as given.
 </tools>`;
 
 const FILE_SYSTEM_GUIDELINES = `<file_system_guidelines>
@@ -86,10 +93,11 @@ Attached images may arrive as native multimodal image content for vision-native 
 </image_handling>`;
 
 export function buildSystemPrompt(input: BuildSystemPromptInput): string {
-  const { cwd, tools, agentsMd } = input;
+  const { cwd, tools, provider, model, agentsMd } = input;
   const sections: string[] = [
     PERSONA,
-    renderEnvironment(cwd),
+    // RAMBLA-FORK: feature: 2026-09-24-feat-system-prompt-self-identity.md: render the session's provider and model in the environment block.
+    renderEnvironment(cwd, provider, model),
     TOOLS_TEMPLATE.replace("__TOOLS__", tools.join(", ")),
     FILE_SYSTEM_GUIDELINES,
     VERSION_CONTROL,
@@ -104,7 +112,8 @@ export function buildSystemPrompt(input: BuildSystemPromptInput): string {
   return sections.join("\n\n");
 }
 
-function renderEnvironment(cwd: string): string {
+// RAMBLA-FORK: feature: 2026-09-24-feat-system-prompt-self-identity.md: the environment block names the session's provider and model.
+function renderEnvironment(cwd: string, provider: string, model: string): string {
   return [
     "<environment>",
     `- Working directory: ${cwd}`,
@@ -112,6 +121,8 @@ function renderEnvironment(cwd: string): string {
     `- Shell: ${process.env["SHELL"] ?? "(unknown)"}`,
     `- Node version: ${process.version}`,
     `- Today's date: ${new Date().toISOString().slice(0, 10)}`,
+    `- Provider: ${provider}`,
+    `- Model: ${model}`,
     "</environment>",
   ].join("\n");
 }

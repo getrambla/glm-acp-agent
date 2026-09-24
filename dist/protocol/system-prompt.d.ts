@@ -18,6 +18,10 @@ export interface BuildSystemPromptInput {
     cwd: string;
     /** Names of tools available for this session, in declaration order. */
     tools: ReadonlyArray<string>;
+    /** The agent provider id running this session, advertised in the environment block. */
+    provider: string;
+    /** The model name serving this session, advertised in the environment block. */
+    model: string;
     /**
      * Optional project context drawn from `AGENTS.md` (preferred) or `CLAUDE.md`.
      * Caller is responsible for capping the byte size before passing it in.
